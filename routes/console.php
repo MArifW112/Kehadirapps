@@ -17,4 +17,4 @@ Artisan::command('absensi:jalankan-penandaan', function () {
 
     $this->info('Perintah penandaan absensi otomatis telah dijalankan.');
 })->purpose('Menjalankan proses penandaan absensi Alpha secara otomatis setiap hari.')
-  ->dailyAt('09:30');
+->dailyAt('18:40'); // UBAH JADWAL DI SINI UNTUK TESTING
