@@ -3,6 +3,9 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Session\TokenMismatchException; // <<< Import ini
+use Illuminate\Http\Request; // <<< Import ini
+
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -21,5 +24,15 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        // <<< TAMBAHKAN BLOK INI
+        $exceptions->renderable(function (TokenMismatchException $e, Request $request) {
+            // Jika ini permintaan API, mungkin kembalikan JSON error
+            if ($request->expectsJson()) {
+                return response()->json(['message' => 'Token CSRF tidak valid atau kadaluarsa. Silakan login kembali.'], 419);
+            }
+
+            // Untuk permintaan web, redirect ke halaman login dengan pesan error
+            return redirect('/')->with('error', 'Sesi Anda telah berakhir. Silakan login kembali.');
+        });
+        // >>> AKHIR BLOK INI
     })->create();
