@@ -57,6 +57,7 @@ class KaryawanController extends Controller
         if ($request->hasFile('foto')) {
             foreach ($request->file('foto') as $image) {
                 // Simpan foto utama karyawan ke disk 'public' (yang kini adalah Persistent Volume)
+                // Ini akan menyimpan di: /app/storage/app/public/foto_karyawan/namafile.ext
                 $path = $image->store('foto_karyawan', 'public');
                 KaryawanFoto::create([
                     'karyawan_id' => $karyawan->id,
@@ -64,7 +65,7 @@ class KaryawanController extends Controller
                 ]);
 
                 // === Salin ke face_db (DeepFace Gallery) di Persistent Volume ===
-                // Tentukan sub-direktori face_db di dalam root disk 'public' (volume)
+                // Ini akan menyimpan di: /app/storage/app/public/face_db/{karyawan_id}/face_{uniqid}.ext
                 $faceDbSubDir = 'face_db/' . $karyawan->id;
                 $filenameForFaceDb = 'face_' . uniqid() . '.' . $image->getClientOriginalExtension();
                 $destPathInVolume = $faceDbSubDir . '/' . $filenameForFaceDb;
@@ -77,15 +78,9 @@ class KaryawanController extends Controller
                 // Salin foto dari 'foto_karyawan' ke 'face_db' di dalam disk 'public' (volume)
                 Storage::disk('public')->copy($path, $destPathInVolume);
 
-                // Dapatkan path fisik ke file di Persistent Volume untuk script Python
-                // env('RAILWAY_VOLUME_MOUNT_PATH') akan memberi kita root mount point
-                $physicalPathForPython = env('RAILWAY_VOLUME_MOUNT_PATH') . '/' . $destPathInVolume;
-
-                // Ubah path interpreter Python ke 'python3' untuk Linux
-                $python = 'python3';
-                $cropScript = base_path('ai_face_recog/helper.py'); // Script helper ini masih dari kode aplikasi
-                $cmd = "\"$python\" \"$cropScript\" \"$physicalPathForPython\" \"$physicalPathForPython\"";
-                exec($cmd, $output, $resultCode);
+                // --- Panggilan ke helper.py (auto-cropper) DIHAPUS DI SINI ---
+                // Asumsi foto yang diunggah oleh admin sudah di-crop secara manual.
+                // Baris-baris $python = ..., $cropScript = ..., $cmd = ... exec($cmd) DIHAPUS.
             }
         }
 
@@ -131,14 +126,9 @@ class KaryawanController extends Controller
                 }
                 Storage::disk('public')->copy($path, $destPathInVolume);
 
-                // Dapatkan path fisik ke file di Persistent Volume untuk script Python
-                $physicalPathForPython = env('RAILWAY_VOLUME_MOUNT_PATH') . '/' . $destPathInVolume;
-
-                // Ubah path interpreter Python ke 'python3' untuk Linux
-                $python = 'python3';
-                $cropScript = base_path('ai_face_recog/helper.py');
-                $cmd = "\"$python\" \"$cropScript\" \"$physicalPathForPython\" \"$physicalPathForPython\"";
-                exec($cmd, $output, $resultCode);
+                // --- Panggilan ke helper.py (auto-cropper) DIHAPUS DI SINI ---
+                // Asumsi foto yang diunggah oleh admin sudah di-crop secara manual.
+                // Baris-baris $python = ..., $cropScript = ..., $cmd = ... exec($cmd) DIHAPUS.
             }
         }
 
@@ -149,7 +139,8 @@ class KaryawanController extends Controller
     {
         // Hapus foto dari storage & database
         foreach ($karyawan->fotos as $foto) {
-            Storage::disk('public')->delete($foto->path); // Menghapus dari Persistent Volume
+            // Hapus foto dari lokasi utama di Persistent Volume
+            Storage::disk('public')->delete($foto->path);
 
             // === Hapus juga dari face_db di Persistent Volume ===
             // Asumsi foto yang ada di foto_karyawan/ juga ada salinannya di face_db/
@@ -157,10 +148,12 @@ class KaryawanController extends Controller
             $basename = pathinfo($foto->path, PATHINFO_BASENAME); // Mengambil nama file dasar dari path utama
 
             // Cari file-file yang namanya mirip di folder face_db di volume
-            // Storage::disk('public')->files() akan list file dari root disk public
-            foreach (Storage::disk('public')->files($faceDbDirInVolume) as $faceDbFile) {
-                if (str_contains(basename($faceDbFile), pathinfo($basename, PATHINFO_FILENAME))) {
-                    Storage::disk('public')->delete($faceDbFile); // Hapus dari Persistent Volume
+            // Storage::disk('public')->files() akan list file dari root disk public (volume)
+            if (Storage::disk('public')->exists($faceDbDirInVolume)) { // Pastikan folder ada
+                foreach (Storage::disk('public')->files($faceDbDirInVolume) as $faceDbFile) {
+                    if (str_contains(basename($faceDbFile), pathinfo($basename, PATHINFO_FILENAME))) {
+                        Storage::disk('public')->delete($faceDbFile); // Hapus dari Persistent Volume
+                    }
                 }
             }
             $foto->delete(); // Hapus dari database Laravel
@@ -188,9 +181,11 @@ class KaryawanController extends Controller
         // === Hapus juga dari face_db di Persistent Volume ===
         $faceDbDirInVolume = 'face_db/' . $foto->karyawan_id;
         $basename = pathinfo($foto->path, PATHINFO_BASENAME);
-        foreach (Storage::disk('public')->files($faceDbDirInVolume) as $faceDbFile) {
-            if (str_contains(basename($faceDbFile), pathinfo($basename, PATHINFO_FILENAME))) {
-                Storage::disk('public')->delete($faceDbFile); // Hapus dari Persistent Volume
+        if (Storage::disk('public')->exists($faceDbDirInVolume)) { // Pastikan folder ada
+            foreach (Storage::disk('public')->files($faceDbDirInVolume) as $faceDbFile) {
+                if (str_contains(basename($faceDbFile), pathinfo($basename, PATHINFO_FILENAME))) {
+                    Storage::disk('public')->delete($faceDbFile); // Hapus dari Persistent Volume
+                }
             }
         }
         $foto->delete();
