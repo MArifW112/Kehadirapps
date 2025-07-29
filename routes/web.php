@@ -18,8 +18,8 @@ use App\Http\Middleware\RoleAdmin;
 
 // Redirect default ke login
 Route::get('/', function () {
-    return view('auth.login'); // langsung ke tampilan login
-});
+    return view('auth.login');
+})->name('login.show');
 // Grup route khusus admin
 Route::prefix('admin')
 ->middleware([\App\Http\Middleware\RoleAdmin::class])
