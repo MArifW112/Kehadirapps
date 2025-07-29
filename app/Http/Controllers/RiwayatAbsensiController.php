@@ -80,20 +80,22 @@ class RiwayatAbsensiController extends Controller
                         }
                     } else {
                         // Ini kasus jika ada record tapi jam_masuk null (kemungkinan record Alpha dari scheduler)
-                        $statusUntukTampilan = 'Alpha';
+                        $statusUntukTampilan = 'Alpha'; // Status 'Alpha' hanya muncul jika sudah tersimpan di DB oleh scheduler
                     }
                 } else {
-                    // Jika tidak ada data absen DAN tidak ada izin di DB
-                    $waktuSaatIni = Carbon::now()->format('H:i:s');
-                    $batasWaktuAlpha = Carbon::parse($jadwal->jam_masuk)->addHour()->format('H:i:s');
+                    // --- PERUBAHAN KRUSIAL DI SINI ---
+                    // Jika TIDAK ada data absen DAN TIDAK ada izin di DB,
+                    // maka default status untuk tampilan adalah "Belum Absen".
+                    // Status "Alpha" hanya akan muncul setelah scheduler menyimpannya ke database.
+                    $statusUntukTampilan = 'Belum Absen';
 
-                    if ($waktuSaatIni >= $batasWaktuAlpha || Carbon::parse($tanggal)->lt(Carbon::today())) {
-                        // Jika sudah melewati deadline atau ini hari sebelumnya, asumsikan Alpha untuk tampilan
-                        // (scheduler yang akan menyimpan ini ke DB)
-                        $statusUntukTampilan = 'Alpha'; // Akan di-override jika scheduler sudah jalan
-                    } else {
-                        // Belum melewati deadline untuk hari ini
-                        $statusUntukTampilan = 'Belum Absen';
+                    // Jika ini adalah hari yang sudah lewat dan belum ada absen/izin di DB,
+                    // ini menunjukkan scheduler belum berjalan atau ada masalah,
+                    // tapi untuk tampilan, kita tetap menampilkannya sebagai 'Belum Absen'
+                    // agar konsisten dengan data yang bisa diunduh.
+                    if (Carbon::parse($tanggal)->lt(Carbon::today())) {
+                        // Untuk hari-hari yang sudah lewat, bisa juga tambahkan catatan di log kalau ini terjadi
+                        // Log::warning("Karyawan {$karyawan->nama_karyawan} pada {$tanggal} belum memiliki record absen/izin setelah jam scheduler.");
                     }
                 }
 
