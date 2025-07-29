@@ -64,7 +64,6 @@ class KaryawanController extends Controller
                     'path'        => $path,
                 ]);
 
-                // === Salin ke face_db (DeepFace Gallery) di Persistent Volume ===
                 // Ini akan menyimpan di: /app/storage/app/public/face_db/{karyawan_id}/face_{uniqid}.ext
                 $faceDbSubDir = 'face_db/' . $karyawan->id;
                 $filenameForFaceDb = 'face_' . uniqid() . '.' . $image->getClientOriginalExtension();
