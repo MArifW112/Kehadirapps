@@ -2,7 +2,7 @@
     <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-100 via-white to-blue-100">
         <div class="w-full max-w-md p-8 bg-white rounded-2xl shadow-xl">
             <div class="text-center mb-6">
-                <img src="{{ asset('images/logo.png') }}" alt="Logo Kehadirapps"class="w-24 mx-auto mb-3 shadow-none">
+                <img src="{{ asset('images/Logo.png') }}" alt="Logo Kehadirapps"class="w-24 mx-auto mb-3 shadow-none">
                     <h1 class="text-2xl font-bold text-blue-700">Selamat Datang</h1>
                 <p class="text-sm text-gray-500">Silakan masuk untuk mengakses dashboard admin</p>
             </div>
