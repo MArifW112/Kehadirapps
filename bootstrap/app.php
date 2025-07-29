@@ -3,9 +3,10 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
-use Illuminate\Session\TokenMismatchException; // <<< Import ini
-use Illuminate\Http\Request; // <<< Import ini
-
+use Illuminate\Session\TokenMismatchException; // <<< Pastikan ini ada
+use Illuminate\Http\Request; // <<< Pastikan ini ada
+use Illuminate\Support\Facades\Log; // <<< Pastikan ini ada
+use Throwable; // <<< Pastikan ini ada
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -14,7 +15,7 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // --- TAMBAHKAN BARIS INI DI SINI ---
+        // --- Pastikan trustProxies ada di sini ---
         $middleware->trustProxies(at: '*');
         // ---------------------------------
 
@@ -24,9 +25,17 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        // <<< TAMBAHKAN BLOK INI
+        // <<< BLOK PENANGANAN EXCEPTION ANDA >>>
         $exceptions->renderable(function (TokenMismatchException $e, Request $request) {
-            // Jika ini permintaan API, mungkin kembalikan JSON error
+            // Tambahkan log diagnostik ini untuk melihat apakah handler terpicu
+            Log::error('DEBUG: TokenMismatchException TERPICU untuk Logout!', [
+                'url' => $request->fullUrl(),
+                'method' => $request->method(),
+                'expectsJson' => $request->expectsJson(),
+                // Hati-hati dengan logging header lengkap di produksi karena bisa sensitif data
+                'referrer' => $request->headers->get('referer'),
+            ]);
+
             if ($request->expectsJson()) {
                 return response()->json(['message' => 'Token CSRF tidak valid atau kadaluarsa. Silakan login kembali.'], 419);
             }
@@ -34,5 +43,10 @@ return Application::configure(basePath: dirname(__DIR__))
             // Untuk permintaan web, redirect ke halaman login dengan pesan error
             return redirect('/')->with('error', 'Sesi Anda telah berakhir. Silakan login kembali.');
         });
-        // >>> AKHIR BLOK INI
+        // <<< AKHIR BLOK PENANGANAN EXCEPTION >>>
+
+        // Contoh: Exception handler lain (jika ada)
+        $exceptions->reportable(function (Throwable $e) {
+            //
+        });
     })->create();
