@@ -12,7 +12,7 @@ use App\Http\Controllers\Api\StatistikApiController;
 use App\Http\Controllers\Api\JadwalKerjaApiController;
 
 Route::prefix('auth')->group(function () {
-    Route::post('/login', [AuthApiController::class, 'api.auth.login']);
+    Route::post('/login', [AuthApiController::class, 'loginUser']);
     Route::post('/register', [AuthApiController::class, 'register']);
     Route::post('/pengajuan-izin', [PengajuanIzinApiController::class, 'store']);
     Route::get('/riwayat-absensi', [RiwayatApiController::class, 'absensi']);

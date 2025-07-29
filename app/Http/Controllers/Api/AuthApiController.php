@@ -9,7 +9,7 @@ use App\Models\User;
 
 class AuthApiController extends Controller
 {
-    public function login(Request $request)
+    public function loginUser(Request $request)
     {
         $credentials = $request->only('email', 'password');
 
