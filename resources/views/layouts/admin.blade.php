@@ -164,19 +164,18 @@
                         </div>
                     </div>
                     </a>
-                <!-- Tombol Logout -->
-                <a href="#" onclick="event.preventDefault(); document.getElementById('logout-form').submit();" title="Logout"
-                class="ml-1 text-gray-600 hover:text-red-600 transition p-2 rounded-lg hover:bg-red-50 focus:outline-none">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a1 1 0 01-1 1H5a2 2 0 01-2-2V7a2 2 0 012-2h7a1 1 0 011 1v1"/>
-                    </svg>
-                </a>
-
-                <!-- Form Logout Hidden -->
-                <form id="logout-form" method="POST" action="{{ route('logout') }}" style="display: none;">
-                    @csrf
-                </form>
+                    <!-- Logout -->
+                    <form method="POST" action="{{ route('logout') }}">
+                        @csrf
+                        <button title="Logout" class="ml-1 text-gray-600 hover:text-red-600 transition p-2 rounded-lg hover:bg-red-50 focus:outline-none">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a1 1 0 01-1 1H5a2 2 0 01-2-2V7a2 2 0 012-2h7a1 1 0 011 1v1"/>
+                            </svg>
+                        </button>
+                    </form>
+                </div>
+            </div>
             <!-- Page content -->
             <div class="mt-2 animate-fade-in-move">
                 @yield('content')

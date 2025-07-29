@@ -6,7 +6,7 @@ use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Session\TokenMismatchException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-// HAPUS BARIS INI: use Throwable; // <<< HAPUS!
+use Throwable;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -19,9 +19,17 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->trustProxies(at: '*');
         // ---------------------------------
 
+        // Anda juga bisa menambahkan alias middleware di sini jika belum ada
         $middleware->alias([
             'admin' => \App\Http\Middleware\RoleAdmin::class,
         ]);
+
+        $middleware->web(append: [
+        ])->validateCsrfTokens(
+            except: [
+                'logout',
+            ]
+        );
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->renderable(function (TokenMismatchException $e, Request $request) {
@@ -38,9 +46,9 @@ return Application::configure(basePath: dirname(__DIR__))
 
             return redirect('/')->with('error', 'Sesi Anda telah berakhir. Silakan login kembali.');
         });
-        // Pastikan exception handler lain (jika ada) masih menggunakan Throwable
-        // Misalnya:
-        $exceptions->reportable(function (Throwable $e) { // Throwable tetap digunakan di sini
+
+        // Contoh: Exception handler lain (jika ada)
+        $exceptions->reportable(function (Throwable $e) {
             //
         });
     })->create();
