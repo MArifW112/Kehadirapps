@@ -14,6 +14,5 @@ class RoleAdmin
             return $next($request);
         }
 
-        abort(403, 'Unauthorized'); // Atau redirect('/login') kalau kamu mau logout paksa
-    }
+        return redirect('/')->with('error', 'Akses ditolak');    }
 }
