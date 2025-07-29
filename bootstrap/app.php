@@ -11,7 +11,14 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        // --- TAMBAHKAN BARIS INI DI SINI ---
+        $middleware->trustProxies(at: '*');
+        // ---------------------------------
+
+        // Anda juga bisa menambahkan alias middleware di sini jika belum ada
+        $middleware->alias([
+            'admin' => \App\Http\Middleware\RoleAdmin::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
