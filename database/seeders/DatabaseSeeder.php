@@ -10,13 +10,7 @@ class DatabaseSeeder extends Seeder
     {
         $this->call([
             UserSeeder::class,
+            JadwalKerjaSeeder::class,
         ]);
-            $this->call([
-        PengajuanIzinSeeder::class,
-    ]);
-        $this->call([
-        AbsensiSeeder::class,
-    ]);
     }
-    
 }
