@@ -80,7 +80,7 @@
         <!-- Sidebar -->
         <aside class="w-64 bg-white/95 sidebar-floating rounded-r-3xl shadow-lg hidden md:flex flex-col animate-fade-in-move transition-all">
             <div class="p-7 border-b flex flex-col items-center bg-gradient-to-b from-blue-600 to-blue-400 rounded-br-3xl shadow-md mb-2">
-                <img src="{{ asset('images/logo.png') }}" alt="Logo" class="w-16 h-16 mb-2 rounded-xl shadow-lg border-2 border-blue-100 bg-white">
+                <img src="{{ asset('images/Logo.png') }}" alt="Logo" class="w-16 h-16 mb-2 rounded-xl shadow-lg border-2 border-blue-100 bg-white">
                 <h2 class="text-2xl font-extrabold text-white drop-shadow">Kehadirapps</h2>
                 <span class="text-xs font-medium text-blue-100 mt-1 tracking-widest">Admin Panel</span>
             </div>

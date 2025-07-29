@@ -15,18 +15,19 @@ class RiwayatAbsensiController extends Controller
     {
         // Filter tanggal (default hari ini)
         $tanggal = $request->input('tanggal') ?? Carbon::today()->toDateString();
-        $hariIni = ucfirst(Carbon::parse($tanggal)->locale('id')->isoFormat('dddd'));
+        $namaHari = ucfirst(Carbon::parse($tanggal)->locale('id')->isoFormat('dddd'));
 
         // Cari jadwal kerja aktif hari itu
-        $jadwal = JadwalKerja::whereRaw('LOWER(hari) = ?', [strtolower($hariIni)])
+        $jadwal = JadwalKerja::whereRaw('LOWER(hari) = ?', [strtolower($namaHari)])
             ->where('aktif', 1)
             ->first();
 
+        $absensis = [];
+
         // ===== Pengecekan Hari Libur =====
         if (!$jadwal) {
-            // Tidak ada jadwal aktif (LIBUR)
+            // Jika tidak ada jadwal aktif (Hari Libur), semua dianggap libur
             $karyawans = Karyawan::whereDate('created_at', '<=', $tanggal)->get();
-            $absensis = [];
             foreach ($karyawans as $karyawan) {
                 $absensis[] = [
                     'nama_karyawan' => $karyawan->nama_karyawan,
@@ -37,80 +38,74 @@ class RiwayatAbsensiController extends Controller
                     'status'        => 'Libur',
                 ];
             }
-            return view('admin.riwayat_absensi.index', compact('absensis', 'tanggal'));
-        }
+        } else {
+            // ===== HARI KERJA (ada jadwal aktif) =====
+            // Ambil karyawan yang sudah aktif sebelum/sama tanggal filter
+            $karyawans = Karyawan::whereDate('created_at', '<=', $tanggal)->get();
 
-        // ===== HARI KERJA (jadwal aktif) =====
-        // Ambil karyawan yang sudah aktif sebelum/sama tanggal filter
-        $karyawans = Karyawan::with([
-            'absensis' => function ($q) use ($tanggal) {
-                $q->where('tanggal', $tanggal);
-            }
-        ])
-        ->whereDate('created_at', '<=', $tanggal)
-        ->get();
+            foreach ($karyawans as $karyawan) {
+                // Ambil catatan absensi karyawan untuk tanggal tersebut
+                $absen = Absensi::where('karyawan_id', $karyawan->id)
+                    ->where('tanggal', $tanggal)
+                    ->first();
 
-        $absensis = [];
-        foreach ($karyawans as $karyawan) {
-            $absen = $karyawan->absensis->first();
+                // Ambil pengajuan izin yang disetujui untuk karyawan pada tanggal tersebut
+                $izin = PengajuanIzin::where('karyawan_id', $karyawan->id)
+                    ->where('tanggal', $tanggal)
+                    ->where('status', 'Disetujui')
+                    ->first();
 
-            // Cek ada izin?
-            $izin = PengajuanIzin::where('karyawan_id', $karyawan->id)
-                ->where('tanggal', $tanggal)
-                ->where('status', 'Disetujui')
-                ->first();
+                $statusUntukTampilan = '';
+                $jamMasukTampilan = '-';
+                $jamPulangTampilan = '-';
+                $fotoTampilan = null;
 
-            $status = 'Alpha';
-            if ($izin) {
-                $status = 'Izin';
-            } elseif ($absen) {
-                if ($absen->jam_masuk) {
-                    // Cek telat
-                    if ($absen->jam_masuk > Carbon::parse($jadwal->jam_masuk)->addMinutes(30)->format('H:i:s')) {
-                        $status = 'Telat';
+                // Tentukan status berdasarkan data yang ada di database atau perhitungan sementara untuk tampilan
+                if ($izin) {
+                    $statusUntukTampilan = 'Izin';
+                } elseif ($absen) {
+                    // Jika ada data absen di DB
+                    $jamMasukTampilan = $absen->jam_masuk ?? '-';
+                    $jamPulangTampilan = $absen->jam_pulang ?? '-';
+                    $fotoTampilan = $absen->foto ?? null;
+
+                    if ($absen->status) {
+                        $statusUntukTampilan = $absen->status; // Ambil status langsung dari DB (Hadir, Telat, Alpha)
+                    } elseif ($absen->jam_masuk) {
+                        // Jika jam masuk ada tapi status belum diisi (jarang terjadi setelah scheduler)
+                        if ($absen->jam_masuk > Carbon::parse($jadwal->jam_masuk)->addMinutes(30)->format('H:i:s')) {
+                            $statusUntukTampilan = 'Telat';
+                        } else {
+                            $statusUntukTampilan = 'Hadir';
+                        }
                     } else {
-                        $status = 'Hadir';
+                        // Ini kasus jika ada record tapi jam_masuk null (kemungkinan record Alpha dari scheduler)
+                        $statusUntukTampilan = 'Alpha';
                     }
-                }
-            } else {
-                // Tidak absen dan tidak izin
-                $now = Carbon::now()->format('H:i:s');
-                $deadlineAlpha = Carbon::parse($jadwal->jam_masuk)->addHour()->format('H:i:s');
-                // Sudah lewat deadline atau buka riwayat hari sebelumnya
-                if ($now >= $deadlineAlpha || $tanggal != Carbon::today()->toDateString()) {
-                    // Cek sudah pernah disimpan alpha atau belum
-                    $existingAbsensi = Absensi::where('karyawan_id', $karyawan->id)
-                        ->where('tanggal', $tanggal)
-                        ->first();
-                    if (!$existingAbsensi) {
-                        Absensi::create([
-                            'karyawan_id' => $karyawan->id,
-                            'tanggal'     => $tanggal,
-                            'status'      => 'Alpha',
-                            'jam_masuk'   => null,
-                            'jam_pulang'  => null,
-                            'foto'        => null,
-                        ]);
-                    }
-                    $status = 'Alpha';
                 } else {
-                    $status = 'Belum Absen';
+                    // Jika tidak ada data absen DAN tidak ada izin di DB
+                    $waktuSaatIni = Carbon::now()->format('H:i:s');
+                    $batasWaktuAlpha = Carbon::parse($jadwal->jam_masuk)->addHour()->format('H:i:s');
+
+                    if ($waktuSaatIni >= $batasWaktuAlpha || Carbon::parse($tanggal)->lt(Carbon::today())) {
+                        // Jika sudah melewati deadline atau ini hari sebelumnya, asumsikan Alpha untuk tampilan
+                        // (scheduler yang akan menyimpan ini ke DB)
+                        $statusUntukTampilan = 'Alpha'; // Akan di-override jika scheduler sudah jalan
+                    } else {
+                        // Belum melewati deadline untuk hari ini
+                        $statusUntukTampilan = 'Belum Absen';
+                    }
                 }
+
+                $absensis[] = [
+                    'nama_karyawan' => $karyawan->nama_karyawan,
+                    'tanggal'       => $tanggal,
+                    'jam_masuk'     => $jamMasukTampilan,
+                    'foto'          => $fotoTampilan,
+                    'jam_pulang'    => $jamPulangTampilan,
+                    'status'        => $statusUntukTampilan,
+                ];
             }
-
-            // Ambil ulang absen (biar update jam_pulang & status terbaru)
-            $absen = Absensi::where('karyawan_id', $karyawan->id)
-                ->where('tanggal', $tanggal)
-                ->first();
-
-            $absensis[] = [
-                'nama_karyawan' => $karyawan->nama_karyawan,
-                'tanggal'       => $tanggal,
-                'jam_masuk'     => $absen->jam_masuk ?? '-',
-                'foto'          => $absen->foto ?? null,
-                'jam_pulang'    => $absen->jam_pulang ?? '-',
-                'status'        => $absen->status ?? $status,
-            ];
         }
 
         return view('admin.riwayat_absensi.index', compact('absensis', 'tanggal'));
