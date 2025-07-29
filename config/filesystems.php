@@ -13,7 +13,7 @@ return [
     |
     */
 
-    'default' => env('FILESYSTEM_DISK', 'local'),
+    'default' => env('FILESY_DISK', 'local'),
 
     /*
     |--------------------------------------------------------------------------
@@ -40,7 +40,9 @@ return [
 
         'public' => [
             'driver' => 'local',
-            'root' => storage_path('app/public'),
+            // UBAH ROOT INI KE JALUR PERSISTENT VOLUME ANDA
+            // Menggunakan variabel lingkungan yang disediakan Railway
+            'root' => env('RAILWAY_VOLUME_MOUNT_PATH', storage_path('app/public')), // <<< BARIS INI DIUBAH
             'url' => env('APP_URL').'/storage',
             'visibility' => 'public',
             'throw' => false,

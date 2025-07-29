@@ -7,8 +7,8 @@ use App\Models\User;
 use App\Models\KaryawanFoto;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Storage; // Pastikan ini di-import
+use Illuminate\Support\Facades\File; // Tetap ada jika Anda masih menggunakannya untuk base_path, dll.
 
 class KaryawanController extends Controller
 {
@@ -56,24 +56,35 @@ class KaryawanController extends Controller
         // Simpan foto-foto (jika ada)
         if ($request->hasFile('foto')) {
             foreach ($request->file('foto') as $image) {
+                // Simpan foto utama karyawan ke disk 'public' (yang kini adalah Persistent Volume)
                 $path = $image->store('foto_karyawan', 'public');
                 KaryawanFoto::create([
                     'karyawan_id' => $karyawan->id,
                     'path'        => $path,
                 ]);
 
-                // === Copy ke face_db (DeepFace Gallery) ===
-                $faceDbDir = base_path('ai_face_recog/face_db/' . $karyawan->id);
-                if (!File::exists($faceDbDir)) {
-                    File::makeDirectory($faceDbDir, 0777, true, true);
+                // === Salin ke face_db (DeepFace Gallery) di Persistent Volume ===
+                // Tentukan sub-direktori face_db di dalam root disk 'public' (volume)
+                $faceDbSubDir = 'face_db/' . $karyawan->id;
+                $filenameForFaceDb = 'face_' . uniqid() . '.' . $image->getClientOriginalExtension();
+                $destPathInVolume = $faceDbSubDir . '/' . $filenameForFaceDb;
+
+                // Pastikan direktori face_db untuk karyawan ini ada di Persistent Volume
+                if (!Storage::disk('public')->exists($faceDbSubDir)) {
+                    Storage::disk('public')->makeDirectory($faceDbSubDir);
                 }
-                $source = storage_path('app/public/' . $path);
-                $filename = 'face_' . uniqid() . '.' . $image->getClientOriginalExtension();
-                $dest = $faceDbDir . '/' . $filename;
-                File::copy($source, $dest);
-                $python = 'C:\Users\LENOVO\AppData\Local\Programs\Python\Python312\python.exe';
-                $cropScript = base_path('ai_face_recog/helper.py');
-                $cmd = "\"$python\" \"$cropScript\" \"$dest\" \"$dest\"";
+
+                // Salin foto dari 'foto_karyawan' ke 'face_db' di dalam disk 'public' (volume)
+                Storage::disk('public')->copy($path, $destPathInVolume);
+
+                // Dapatkan path fisik ke file di Persistent Volume untuk script Python
+                // env('RAILWAY_VOLUME_MOUNT_PATH') akan memberi kita root mount point
+                $physicalPathForPython = env('RAILWAY_VOLUME_MOUNT_PATH') . '/' . $destPathInVolume;
+
+                // Ubah path interpreter Python ke 'python3' untuk Linux
+                $python = 'python3';
+                $cropScript = base_path('ai_face_recog/helper.py'); // Script helper ini masih dari kode aplikasi
+                $cmd = "\"$python\" \"$cropScript\" \"$physicalPathForPython\" \"$physicalPathForPython\"";
                 exec($cmd, $output, $resultCode);
             }
         }
@@ -103,24 +114,30 @@ class KaryawanController extends Controller
         // Upload foto tambahan (tidak menghapus foto lama)
         if ($request->hasFile('foto')) {
             foreach ($request->file('foto') as $image) {
+                // Simpan foto utama karyawan ke disk 'public' (yang kini adalah Persistent Volume)
                 $path = $image->store('foto_karyawan', 'public');
                 KaryawanFoto::create([
                     'karyawan_id' => $karyawan->id,
                     'path'        => $path,
                 ]);
 
-                // === Copy ke face_db ===
-                $faceDbDir = base_path('ai_face_recog/face_db/' . $karyawan->id);
-                if (!File::exists($faceDbDir)) {
-                    File::makeDirectory($faceDbDir, 0777, true, true);
+                // === Salin ke face_db (DeepFace Gallery) di Persistent Volume ===
+                $faceDbSubDir = 'face_db/' . $karyawan->id;
+                $filenameForFaceDb = 'face_' . uniqid() . '.' . $image->getClientOriginalExtension();
+                $destPathInVolume = $faceDbSubDir . '/' . $filenameForFaceDb;
+
+                if (!Storage::disk('public')->exists($faceDbSubDir)) {
+                    Storage::disk('public')->makeDirectory($faceDbSubDir);
                 }
-                $source = storage_path('app/public/' . $path);
-                $filename = 'face_' . uniqid() . '.' . $image->getClientOriginalExtension();
-                $dest = $faceDbDir . '/' . $filename;
-                File::copy($source, $dest);
-                $python = 'C:\Users\LENOVO\AppData\Local\Programs\Python\Python312\python.exe';
+                Storage::disk('public')->copy($path, $destPathInVolume);
+
+                // Dapatkan path fisik ke file di Persistent Volume untuk script Python
+                $physicalPathForPython = env('RAILWAY_VOLUME_MOUNT_PATH') . '/' . $destPathInVolume;
+
+                // Ubah path interpreter Python ke 'python3' untuk Linux
+                $python = 'python3';
                 $cropScript = base_path('ai_face_recog/helper.py');
-                $cmd = "\"$python\" \"$cropScript\" \"$dest\" \"$dest\"";
+                $cmd = "\"$python\" \"$cropScript\" \"$physicalPathForPython\" \"$physicalPathForPython\"";
                 exec($cmd, $output, $resultCode);
             }
         }
@@ -132,61 +149,65 @@ class KaryawanController extends Controller
     {
         // Hapus foto dari storage & database
         foreach ($karyawan->fotos as $foto) {
-            Storage::disk('public')->delete($foto->path);
+            Storage::disk('public')->delete($foto->path); // Menghapus dari Persistent Volume
 
-            // Hapus juga dari face_db (jika ada)
-            $faceDbDir = base_path('ai_face_recog/face_db/' . $karyawan->id);
-            if (File::exists($faceDbDir)) {
-                $basename = pathinfo($foto->path, PATHINFO_BASENAME);
-                foreach (File::files($faceDbDir) as $file) {
-                    if (str_contains($file->getFilename(), pathinfo($basename, PATHINFO_FILENAME))) {
-                        File::delete($file->getPathname());
-                    }
+            // === Hapus juga dari face_db di Persistent Volume ===
+            // Asumsi foto yang ada di foto_karyawan/ juga ada salinannya di face_db/
+            $faceDbDirInVolume = 'face_db/' . $karyawan->id;
+            $basename = pathinfo($foto->path, PATHINFO_BASENAME); // Mengambil nama file dasar dari path utama
+
+            // Cari file-file yang namanya mirip di folder face_db di volume
+            // Storage::disk('public')->files() akan list file dari root disk public
+            foreach (Storage::disk('public')->files($faceDbDirInVolume) as $faceDbFile) {
+                if (str_contains(basename($faceDbFile), pathinfo($basename, PATHINFO_FILENAME))) {
+                    Storage::disk('public')->delete($faceDbFile); // Hapus dari Persistent Volume
                 }
             }
-            $foto->delete();
+            $foto->delete(); // Hapus dari database Laravel
         }
 
         // Hapus data karyawan & user
         $karyawan->user()->delete();
         $karyawan->delete();
 
-        // Opsional: hapus folder face_db jika sudah kosong dan ada
-        $faceDbDir = base_path('ai_face_recog/face_db/' . $karyawan->id);
-        if (File::isDirectory($faceDbDir) && count(File::files($faceDbDir)) === 0) {
-            File::deleteDirectory($faceDbDir);
+        // Opsional: hapus folder face_db jika sudah kosong dan ada di Persistent Volume
+        $faceDbDirInVolume = 'face_db/' . $karyawan->id;
+        if (Storage::disk('public')->exists($faceDbDirInVolume) && count(Storage::disk('public')->files($faceDbDirInVolume)) === 0) {
+            Storage::disk('public')->deleteDirectory($faceDbDirInVolume);
         }
 
         return redirect()->route('admin.karyawan.index')->with('success', 'Karyawan berhasil dihapus.');
     }
 
-    // deleteFoto() tetap sama, tapi arahkan ke face_db
+    // deleteFoto() tetap sama, tapi sekarang akan menghapus dari Persistent Volume
     public function deleteFoto($id)
     {
         $foto = KaryawanFoto::findOrFail($id);
-        Storage::disk('public')->delete($foto->path);
+        Storage::disk('public')->delete($foto->path); // Menghapus dari Persistent Volume
 
-        // Hapus juga dari face_db jika ada
-        $faceDbDir = base_path('ai_face_recog/face_db/' . $foto->karyawan_id);
+        // === Hapus juga dari face_db di Persistent Volume ===
+        $faceDbDirInVolume = 'face_db/' . $foto->karyawan_id;
         $basename = pathinfo($foto->path, PATHINFO_BASENAME);
-        foreach (File::files($faceDbDir) as $file) {
-            if (str_contains($file->getFilename(), pathinfo($basename, PATHINFO_FILENAME))) {
-                File::delete($file->getPathname());
+        foreach (Storage::disk('public')->files($faceDbDirInVolume) as $faceDbFile) {
+            if (str_contains(basename($faceDbFile), pathinfo($basename, PATHINFO_FILENAME))) {
+                Storage::disk('public')->delete($faceDbFile); // Hapus dari Persistent Volume
             }
         }
         $foto->delete();
 
         return back()->with('success', 'Foto berhasil dihapus.');
     }
+
     public function edit(Karyawan $karyawan)
-{
-    $karyawan->load('fotos');
-    return view('admin.karyawan.edit', compact('karyawan'));
-}
-public function show($id)
-{
-    // Ambil data karyawan beserta relasi foto dan user-nya
-    $karyawan = Karyawan::with(['fotos', 'user'])->findOrFail($id);
-    return view('admin.karyawan.show', compact('karyawan'));
-}
+    {
+        $karyawan->load('fotos');
+        return view('admin.karyawan.edit', compact('karyawan'));
+    }
+
+    public function show($id)
+    {
+        // Ambil data karyawan beserta relasi foto dan user-nya
+        $karyawan = Karyawan::with(['fotos', 'user'])->findOrFail($id);
+        return view('admin.karyawan.show', compact('karyawan'));
+    }
 }
