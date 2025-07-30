@@ -156,14 +156,24 @@ class KaryawanController extends Controller
                         'request_method' => $e->getRequest()->getMethod(),
                     ]);
 
-                    // <<< UBAH BARIS INI UNTUK DEBUGGING >>>
-                    // Mengembalikan pesan error lengkap dari Guzzle ke browser
-                    return redirect()->back()->withInput()->with('error', 'DEBUG ERROR: Gagal terhubung/memproses foto wajah. Error: ' . $e->getMessage() . '. Respon API: ' . $responseBody);
+                    // <<< UBAH BARIS INI UNTUK DEBUGGING MENGGUNAKAN INSPECT ELEMENT >>>
+                    return response()->json([
+                        'status' => false,
+                        'message' => 'DEBUG_FROM_GUZZLE_EXCEPTION: ' . $e->getMessage(),
+                        'api_response_body' => $responseBody,
+                        'request_url_sent' => $e->getRequest()->getUri()->__toString(),
+                        'request_method_sent' => $e->getRequest()->getMethod(),
+                    ], 500);
                     // <<< AKHIR UBAH >>>
 
                 } catch (\Exception $e) {
                     Log::error("[KaryawanController@store] General Exception saat crop foto (index $index): " . $e->getMessage());
-                    return redirect()->back()->withInput()->with('error', 'DEBUG ERROR: Terjadi kesalahan tak terduga saat verifikasi wajah: ' . $e->getMessage());
+                    // <<< UBAH BARIS INI UNTUK DEBUGGING MENGGUNAKAN INSPECT ELEMENT >>>
+                    return response()->json([
+                        'status' => false,
+                        'message' => 'DEBUG_FROM_GENERAL_EXCEPTION: ' . $e->getMessage(),
+                    ], 500);
+                    // <<< AKHIR UBAH >>>
                 } finally {
                     // Pastikan file handle ditutup
                     if (isset($fileHandle) && is_resource($fileHandle)) {
@@ -295,13 +305,24 @@ class KaryawanController extends Controller
                         'request_method' => $e->getRequest()->getMethod(),
                     ]);
 
-                    // <<< UBAH BARIS INI UNTUK DEBUGGING >>>
-                    return redirect()->back()->withInput()->with('error', 'DEBUG ERROR: Gagal terhubung/memproses foto wajah. Error: ' . $e->getMessage() . '. Respon API: ' . $responseBody);
+                    // <<< UBAH BARIS INI UNTUK DEBUGGING MENGGUNAKAN INSPECT ELEMENT >>>
+                    return response()->json([
+                        'status' => false,
+                        'message' => 'DEBUG_FROM_GUZZLE_EXCEPTION: ' . $e->getMessage(),
+                        'api_response_body' => $responseBody,
+                        'request_url_sent' => $e->getRequest()->getUri()->__toString(),
+                        'request_method_sent' => $e->getRequest()->getMethod(),
+                    ], 500);
                     // <<< AKHIR UBAH >>>
 
                 } catch (\Exception $e) {
                     Log::error("[KaryawanController@update] General Exception saat crop foto (index $index): " . $e->getMessage());
-                    return redirect()->back()->withInput()->with('error', 'DEBUG ERROR: Terjadi kesalahan tak terduga saat verifikasi wajah: ' . $e->getMessage());
+                    // <<< UBAH BARIS INI UNTUK DEBUGGING MENGGUNAKAN INSPECT ELEMENT >>>
+                    return response()->json([
+                        'status' => false,
+                        'message' => 'DEBUG_FROM_GENERAL_EXCEPTION: ' . $e->getMessage(),
+                    ], 500);
+                    // <<< AKHIR UBAH >>>
                 } finally {
                     if (isset($fileHandle) && is_resource($fileHandle)) {
                         fclose($fileHandle); // Pastikan file handle ditutup
