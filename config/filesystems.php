@@ -13,7 +13,7 @@ return [
     |
     */
 
-    'default' => env('FILESY_DISK', 'local'),
+    'default' => env('FILESYSTEM_DISK', 'local'),
 
     /*
     |--------------------------------------------------------------------------
@@ -32,7 +32,7 @@ return [
 
         'local' => [
             'driver' => 'local',
-            'root' => storage_path('app/private'),
+            'root' => storage_path('app/private'), // Mengarah ke storage/app/private
             'serve' => true,
             'throw' => false,
             'report' => false,
@@ -40,14 +40,21 @@ return [
 
         'public' => [
             'driver' => 'local',
-            // UBAH ROOT INI KE JALUR PERSISTENT VOLUME ANDA
-            // Menggunakan variabel lingkungan yang disediakan Railway
-            'root' => env('RAILWAY_VOLUME_MOUNT_PATH', storage_path('app/public')), // <<< BARIS INI DIUBAH
+            'root' => env('RAILWAY_VOLUME_MOUNT_PATH', storage_path('app/public')),
             'url' => env('APP_URL').'/storage',
             'visibility' => 'public',
             'throw' => false,
             'report' => false,
         ],
+
+        // <<< TAMBAHKAN DEFINISI DISK 'private' INI >>>
+        'private' => [ // Disk baru untuk file temporer yang tidak diakses publik
+            'driver' => 'local',
+            'root' => storage_path('app/private_temp'), // Path untuk file temporary upload
+            'throw' => false,
+            'report' => false,
+        ],
+        // <<< AKHIR PENAMBAHAN >>>
 
         's3' => [
             'driver' => 's3',
