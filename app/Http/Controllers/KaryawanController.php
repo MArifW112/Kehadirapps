@@ -63,6 +63,7 @@ class KaryawanController extends Controller
             $pythonApiUrl = env('PYTHON_API_URL');
             if (empty($pythonApiUrl)) {
                 Log::error('[KaryawanController@store] PYTHON_API_URL tidak terdefinisi di .env Laravel!');
+                // Hapus user dan karyawan yang baru dibuat jika ini error fatal
                 $karyawan->delete(); $user->delete();
                 return redirect()->back()->withInput()->with('error', 'Konfigurasi server tidak lengkap (API Python URL missing).');
             }
@@ -111,7 +112,7 @@ class KaryawanController extends Controller
                             [
                                 'name'     => 'foto',
                                 'contents' => $fileHandle, // Gunakan resource file handle
-                                'filename' => $image->getClientOriginalName()
+                                'filename' => basename($tempFullPath) // Nama file asli
                             ],
                             [
                                 'name'     => 'karyawan_id',
@@ -143,6 +144,7 @@ class KaryawanController extends Controller
 
                     } else {
                         Log::warning("[KaryawanController@store] Gagal crop foto (index $index): " . ($result['message'] ?? 'Unknown error dari API Python'));
+                        // Lanjutkan ke foto berikutnya atau tangani sesuai kebutuhan (misal: rollback semua?)
                     }
 
                 } catch (\GuzzleHttp\Exception\RequestException $e) {
@@ -153,8 +155,15 @@ class KaryawanController extends Controller
                         'request_url' => $e->getRequest()->getUri()->__toString(),
                         'request_method' => $e->getRequest()->getMethod(),
                     ]);
+
+                    // <<< UBAH BARIS INI UNTUK DEBUGGING >>>
+                    // Mengembalikan pesan error lengkap dari Guzzle ke browser
+                    return redirect()->back()->withInput()->with('error', 'DEBUG ERROR: Gagal terhubung/memproses foto wajah. Error: ' . $e->getMessage() . '. Respon API: ' . $responseBody);
+                    // <<< AKHIR UBAH >>>
+
                 } catch (\Exception $e) {
                     Log::error("[KaryawanController@store] General Exception saat crop foto (index $index): " . $e->getMessage());
+                    return redirect()->back()->withInput()->with('error', 'DEBUG ERROR: Terjadi kesalahan tak terduga saat verifikasi wajah: ' . $e->getMessage());
                 } finally {
                     // Pastikan file handle ditutup
                     if (isset($fileHandle) && is_resource($fileHandle)) {
@@ -285,8 +294,14 @@ class KaryawanController extends Controller
                         'request_url' => $e->getRequest()->getUri()->__toString(),
                         'request_method' => $e->getRequest()->getMethod(),
                     ]);
+
+                    // <<< UBAH BARIS INI UNTUK DEBUGGING >>>
+                    return redirect()->back()->withInput()->with('error', 'DEBUG ERROR: Gagal terhubung/memproses foto wajah. Error: ' . $e->getMessage() . '. Respon API: ' . $responseBody);
+                    // <<< AKHIR UBAH >>>
+
                 } catch (\Exception $e) {
                     Log::error("[KaryawanController@update] General Exception saat crop foto (index $index): " . $e->getMessage());
+                    return redirect()->back()->withInput()->with('error', 'DEBUG ERROR: Terjadi kesalahan tak terduga saat verifikasi wajah: ' . $e->getMessage());
                 } finally {
                     if (isset($fileHandle) && is_resource($fileHandle)) {
                         fclose($fileHandle); // Pastikan file handle ditutup
