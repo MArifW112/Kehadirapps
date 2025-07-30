@@ -8,7 +8,8 @@ use App\Models\Absensi;
 use App\Models\JadwalKerja;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Log; // Pastikan ini di-import
+use Illuminate\Support\Facades\Log;
+use GuzzleHttp\Client;
 
 class AbsensiApiController extends Controller
 {
@@ -44,57 +45,93 @@ class AbsensiApiController extends Controller
         }
 
         // Simpan foto yang diupload ke disk 'public' (yang kini adalah Persistent Volume)
-        $foto = $request->file('foto');
-        $pathFoto = $foto->store('absen_faces', 'public'); // Foto disimpan di absen_faces di Persistent Volume
-
-        // Dapatkan path fisik lengkap dari foto yang disimpan di Persistent Volume untuk script Python
-        $fotoFull = Storage::disk('public')->path($pathFoto);
+        $foto      = $request->file('foto');
+        // Simpan foto asli sementara di lokasi temporer Laravel (disk 'private')
+        $tempPath  = $foto->store('temp_uploads', 'private');
+        $tempFullPath = Storage::disk('private')->path($tempPath);
 
         Log::info('AbsenMasuk - Nama file: ' . $foto->getClientOriginalName());
-        Log::info('AbsenMasuk - Path file di volume: ' . $fotoFull);
-        // Log::info('AbsenMasuk - Ukuran file: ' . filesize($fotoFull)); // filesize() mungkin tidak akurat untuk storage driver selain 'local'
+        Log::info('AbsenMasuk - Path file temporer: ' . $tempFullPath);
 
-        // === DeepFace Validation ===
+        // === Panggilan ke API Python untuk DeepFace Validation ===
         $karyawanId = $request->karyawan_id;
-        // Ubah path interpreter Python ke 'python3' untuk Linux
-        $pythonExe = "python3";
-        $predictScript = base_path('ai_face_recog/predict_deepface.py');
+        // Ambil URL API Python dari variabel lingkungan Railway
+        $pythonApiUrl = env('PYTHON_API_URL');
 
-        // Ambil jalur root Persistent Volume dari variabel lingkungan Railway
-        // Ini adalah path tempat folder 'face_db' berada
-        $faceDbRootPath = env('RAILWAY_VOLUME_MOUNT_PATH');
-
-        // Bangun perintah untuk Python, tambahkan $faceDbRootPath sebagai argumen terakhir
-        $cmd = "\"$pythonExe\" \"$predictScript\" \"$fotoFull\" $karyawanId \"$faceDbRootPath\"";
-
-        Log::info("[absenMasuk] CMD: $cmd");
-        exec($cmd, $output, $exitCode);
-        Log::info("[absenMasuk] predict_deepface.py OUTPUT:", $output);
-        Log::info("[absenMasuk] predict_deepface.py Exit Code:", ['code' => $exitCode]);
-
-        // Gabungkan hasil output python jadi satu string, lalu decode JSON
-        $jsonOutput = implode("", $output);
-        $deepface = json_decode($jsonOutput, true);
-
-        // Tambahkan log jika decoding JSON gagal atau output tidak terduga
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            Log::error("[absenMasuk] Gagal decode JSON dari Python Output!", [
-                'json_error' => json_last_error_msg(),
-                'raw_output' => $output
-            ]);
-            // Sebagai fallback, jika DeepFace gagal atau output tidak valid, anggap tidak cocok
-            $isMatch = false;
-            $score = 0;
-            $deepface = ['error' => 'Invalid DeepFace output or Python script error'];
-        } else {
-            $isMatch = isset($deepface['match']) && intval($deepface['match']) === 1;
-            $score   = isset($deepface['score']) ? floatval($deepface['score']) : 0;
+        // Pastikan URL API Python ada
+        if (empty($pythonApiUrl)) {
+            Log::error('[absenMasuk] PYTHON_API_URL tidak terdefinisi di .env Laravel!');
+            Storage::disk('private')->delete($tempPath); // Hapus foto temporer
+            return response()->json(['status' => false, 'message' => 'Konfigurasi server tidak lengkap (API Python URL missing).'], 500);
         }
 
-        // THRESHOLD score (misal 0.50)
+        $client = new Client(); // Inisialisasi Guzzle HTTP client
+        $deepface = null; // Inisialisasi hasil DeepFace
+
+        try {
+            $response = $client->post("$pythonApiUrl/predict-face", [
+                'multipart' => [ // Kirim sebagai multipart form-data untuk file dan field lainnya
+                    [
+                        'name'     => 'foto',
+                        'contents' => fopen($tempFullPath, 'r'), // Buka file untuk dikirim
+                        'filename' => basename($tempFullPath) // Nama file asli
+                    ],
+                    [
+                        'name'     => 'karyawan_id',
+                        'contents' => $karyawanId
+                    ],
+                    [
+                        'name'     => 'threshold',
+                        'contents' => 0.50 // Kirim threshold jika Anda ingin menyesuaikannya
+                    ]
+                ],
+                'verify' => false // Opsional: Nonaktifkan verifikasi SSL untuk development jika ada masalah sertifikat
+            ]);
+
+            $statusCode = $response->getStatusCode();
+            $body = $response->getBody()->getContents();
+            $deepface = json_decode($body, true);
+
+            Log::info("[absenMasuk] API Python Response Status: $statusCode");
+            Log::info("[absenMasuk] API Python Response Body:", ['body' => $deepface]);
+
+            // Periksa jika API Python mengembalikan error HTTP (status code >= 400) atau format JSON tidak sesuai
+            if ($statusCode >= 400 || !is_array($deepface) || !isset($deepface['match'])) {
+                Log::warning("[absenMasuk] API Python mengembalikan error atau format tidak sesuai: Status $statusCode, Body: $body");
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Terjadi kesalahan pada layanan verifikasi wajah.',
+                    'deepface_raw' => $deepface // Kirim raw response jika ada masalah parsing
+                ], 500);
+            }
+
+        } catch (\GuzzleHttp\Exception\RequestException $e) {
+            $responseBody = $e->getResponse() ? $e->getResponse()->getBody()->getContents() : $e->getMessage();
+            Log::error("[absenMasuk] Guzzle RequestException: " . $e->getMessage(), ['response' => $responseBody]);
+            // Coba decode body jika ada untuk deepface['error']
+            $errorResponse = json_decode($responseBody, true);
+            return response()->json([
+                'status' => false,
+                'message' => 'Gagal terhubung ke layanan verifikasi wajah: ' . ($errorResponse['error'] ?? 'Internal Server Error'),
+                'deepface_error' => $errorResponse
+            ], 500);
+        } catch (\Exception $e) {
+            Log::error("[absenMasuk] General Exception calling Python API: " . $e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Terjadi kesalahan tak terduga saat verifikasi wajah.',
+                'error' => $e->getMessage()
+            ], 500);
+        } finally {
+            Storage::disk('private')->delete($tempPath); // Hapus foto temporer setelah diproses
+            Log::info("[absenMasuk] File temporer dihapus: $tempFullPath");
+        }
+
+        $isMatch = isset($deepface['match']) && intval($deepface['match']) === 1;
+        $score   = isset($deepface['score']) ? floatval($deepface['score']) : 0;
+
         $threshold = 0.50; // atau 0.7 sesuai uji lapangan
         if (!$isMatch || $score < $threshold) {
-            Storage::disk('public')->delete($pathFoto); // Hapus foto yang baru diupload jika tidak match
             Log::warning("[absenMasuk] Wajah tidak sesuai/score terlalu rendah! score=$score threshold=$threshold, isMatch=" . ($isMatch ? 'true' : 'false'));
             return response()->json([
                 'status'   => false,
@@ -103,13 +140,17 @@ class AbsensiApiController extends Controller
             ], 422);
         }
 
+        // Simpan foto asli yang diupload ke disk 'public' (Persistent Volume) setelah DeepFace Match
+        // Ini adalah foto yang akan disimpan di DB sebagai bukti absensi
+        $finalFotoPath = $foto->store('absen_faces', 'public');
+
         // Cek sudah absen hari ini?
         $absenToday = Absensi::where('karyawan_id', $karyawanId)
             ->where('tanggal', Carbon::today()->toDateString())
             ->first();
 
         if ($absenToday) {
-            Storage::disk('public')->delete($pathFoto); // Hapus foto yang baru diupload
+            Storage::disk('public')->delete($finalFotoPath); // Hapus foto jika sudah absen
             Log::warning('[absenMasuk] User sudah absen masuk hari ini!');
             return response()->json(['status' => false, 'message' => 'Sudah absen masuk hari ini!'], 422);
         }
@@ -119,7 +160,7 @@ class AbsensiApiController extends Controller
             'tanggal'     => Carbon::today()->toDateString(),
             'jam_masuk'   => $jamSekarang,
             'status'      => 'Hadir',
-            'foto'        => $pathFoto, // simpan nama/path file foto (path relatif ke disk 'public')
+            'foto'        => $finalFotoPath, // simpan nama/path file foto
         ]);
 
         Log::info('[absenMasuk] Absen berhasil disimpan!', ['absensi' => $absensi]);
@@ -165,52 +206,91 @@ class AbsensiApiController extends Controller
             return response()->json(['status' => false, 'message' => 'Absen pulang hanya bisa dilakukan setelah jam pulang!'], 422);
         }
 
-        // Simpan foto yang diupload ke disk 'public' (yang kini adalah Persistent Volume)
-        $foto = $request->file('foto');
-        $pathFoto = $foto->store('absen_faces', 'public'); // Foto disimpan di absen_faces di Persistent Volume
+        // Simpan foto asli sementara di lokasi temporer Laravel (disk 'private')
+        $foto      = $request->file('foto');
+        $tempPath  = $foto->store('temp_uploads', 'private');
+        $tempFullPath = Storage::disk('private')->path($tempPath);
 
-        // Dapatkan path fisik lengkap dari foto yang disimpan di Persistent Volume untuk script Python
-        $fotoFull = Storage::disk('public')->path($pathFoto);
+        Log::info('AbsenPulang - Nama file: ' . $foto->getClientOriginalName());
+        Log::info('AbsenPulang - Path file temporer: ' . $tempFullPath);
 
-        // === DeepFace Validation ===
+        // === Panggilan ke API Python untuk DeepFace Validation ===
         $karyawanId = $request->karyawan_id;
-        // Ubah path interpreter Python ke 'python3' untuk Linux
-        $pythonExe = "python3";
-        $predictScript = base_path('ai_face_recog/predict_deepface.py');
+        $pythonApiUrl = env('PYTHON_API_URL'); // Ambil URL API Python dari variabel lingkungan
 
-        // Ambil jalur root Persistent Volume dari variabel lingkungan Railway
-        $faceDbRootPath = env('RAILWAY_VOLUME_MOUNT_PATH');
-
-        // Bangun perintah untuk Python, tambahkan $faceDbRootPath sebagai argumen terakhir
-        $cmd = "\"$pythonExe\" \"$predictScript\" \"$fotoFull\" $karyawanId \"$faceDbRootPath\"";
-
-        Log::info("[absenPulang] CMD: $cmd");
-        exec($cmd, $output, $exitCode);
-        Log::info("[absenPulang] predict_deepface.py OUTPUT:", $output);
-        Log::info("[absenPulang] predict_deepface.py Exit Code:", ['code' => $exitCode]);
-
-        // Gabungkan hasil output python jadi satu string, lalu decode JSON
-        $jsonOutput = implode("", $output);
-        $deepface = json_decode($jsonOutput, true);
-
-        // Tambahkan log jika decoding JSON gagal atau output tidak terduga
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            Log::error("[absenPulang] Gagal decode JSON dari Python Output!", [
-                'json_error' => json_last_error_msg(),
-                'raw_output' => $output
-            ]);
-            $isMatch = false;
-            $score = 0;
-            $deepface = ['error' => 'Invalid DeepFace output or Python script error'];
-        } else {
-            $isMatch = isset($deepface['match']) && intval($deepface['match']) === 1;
-            $score = isset($deepface['score']) ? floatval($deepface['score']) : 0;
+        if (empty($pythonApiUrl)) {
+            Log::error('[absenPulang] PYTHON_API_URL tidak terdefinisi di .env Laravel!');
+            Storage::disk('private')->delete($tempPath); // Hapus foto temporer
+            return response()->json(['status' => false, 'message' => 'Konfigurasi server tidak lengkap.'], 500);
         }
 
+        $client = new Client();
+        $deepface = null;
+
+        try {
+            $response = $client->post("$pythonApiUrl/predict-face", [
+                'multipart' => [
+                    [
+                        'name'     => 'foto',
+                        'contents' => fopen($tempFullPath, 'r'),
+                        'filename' => basename($tempFullPath)
+                    ],
+                    [
+                        'name'     => 'karyawan_id',
+                        'contents' => $karyawanId
+                    ],
+                    [
+                        'name'     => 'threshold',
+                        'contents' => 0.50
+                    ]
+                ],
+                'verify' => false // Opsional: Nonaktifkan verifikasi SSL untuk development jika ada masalah sertifikat
+            ]);
+
+            $statusCode = $response->getStatusCode();
+            $body = $response->getBody()->getContents();
+            $deepface = json_decode($body, true);
+
+            Log::info("[absenPulang] API Python Response Status: $statusCode");
+            Log::info("[absenPulang] API Python Response Body:", ['body' => $deepface]);
+
+            // Periksa jika API Python mengembalikan error HTTP (status code >= 400) atau format JSON tidak sesuai
+            if ($statusCode >= 400 || !is_array($deepface) || !isset($deepface['match'])) {
+                Log::warning("[absenPulang] API Python mengembalikan error atau format tidak sesuai: Status $statusCode, Body: $body");
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Terjadi kesalahan pada layanan verifikasi wajah.',
+                    'deepface_raw' => $deepface
+                ], 500);
+            }
+
+        } catch (\GuzzleHttp\Exception\RequestException $e) {
+            $responseBody = $e->getResponse() ? $e->getResponse()->getBody()->getContents() : $e->getMessage();
+            Log::error("[absenPulang] Guzzle RequestException: " . $e->getMessage(), ['response' => $responseBody]);
+            $errorResponse = json_decode($responseBody, true);
+            return response()->json([
+                'status' => false,
+                'message' => 'Gagal terhubung ke layanan verifikasi wajah: ' . ($errorResponse['error'] ?? 'Internal Server Error'),
+                'deepface_error' => $errorResponse
+            ], 500);
+        } catch (\Exception $e) {
+            Log::error("[absenPulang] General Exception calling Python API: " . $e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Terjadi kesalahan tak terduga saat verifikasi wajah.',
+                'error' => $e->getMessage()
+            ], 500);
+        } finally {
+            Storage::disk('private')->delete($tempPath); // Hapus foto temporer setelah diproses
+            Log::info("[absenPulang] File temporer dihapus: $tempFullPath"); // Log penghapusan di finally
+        }
+
+        $isMatch = isset($deepface['match']) && intval($deepface['match']) === 1;
+        $score = isset($deepface['score']) ? floatval($deepface['score']) : 0;
         $threshold = 0.50; // atau 0.7 sesuai uji lapangan
 
         if (!$isMatch || $score < $threshold) {
-            Storage::disk('public')->delete($pathFoto); // Hapus foto yang baru diupload
+            // Foto temporer sudah dihapus di blok try-catch-finally
             Log::warning("[absenPulang] Wajah tidak sesuai/score terlalu rendah (score=$score threshold=$threshold)!");
             return response()->json([
                 'status'   => false,
@@ -219,17 +299,21 @@ class AbsensiApiController extends Controller
             ], 422);
         }
 
+        // Simpan foto asli yang diupload ke disk 'public' (Persistent Volume) setelah DeepFace Match
+        // Ini adalah foto yang akan disimpan di DB sebagai bukti absensi
+        $finalFotoPath = $foto->store('absen_faces', 'public');
+
         $absen = Absensi::where('karyawan_id', $karyawanId)
             ->where('tanggal', $request->tanggal)
             ->first();
 
         if (!$absen) {
-            Storage::disk('public')->delete($pathFoto); // Hapus foto yang baru diupload
+            Storage::disk('public')->delete($finalFotoPath); // Hapus foto jika belum absen masuk
             Log::warning('[absenPulang] User belum absen masuk!');
             return response()->json(['status' => false, 'message' => 'Anda belum absen masuk!'], 422);
         }
         if ($absen->jam_pulang) {
-            Storage::disk('public')->delete($pathFoto); // Hapus foto yang baru diupload
+            Storage::disk('public')->delete($finalFotoPath); // Hapus foto jika sudah absen pulang
             Log::warning('[absenPulang] User sudah absen pulang hari ini!');
             return response()->json(['status' => false, 'message' => 'Anda sudah absen pulang hari ini!'], 422);
         }
@@ -242,7 +326,8 @@ class AbsensiApiController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Absen pulang berhasil!',
-            'deepface' => $deepface
+            'deepface' => $deepface,
+            'data'     => $absen // Tambahkan data absen yang diupdate
         ]);
     }
 }
