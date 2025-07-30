@@ -100,26 +100,26 @@ class KaryawanController extends Controller
                 try {
                     // --- DEBUGGING PANGGILAN GUZZLE ---
                     Log::info("[KaryawanController@store] Memanggil API Python /crop-face:", [
-                        'target_url' => "$pythonApiUrl/crop-face",
-                        'http_method_sent' => 'POST', // Konfirmasi bahwa kita memanggil POST
+                        'target_url' => "$pythonApiUrl/api/v1/crop_my_face", // <<< UBAH KE PATH BARU INI
+                        'http_method_sent' => 'POST',
                         'karyawan_id_sent' => $karyawan->id,
                         'original_filename' => $image->getClientOriginalName(),
                     ]);
                     // --- AKHIR DEBUGGING PANGGILAN GUZZLE ---
 
-                    $response = $client->post("$pythonApiUrl/crop-face", [
-                        'multipart' => [ // Kirim sebagai multipart form-data untuk file dan field lainnya
+                    $response = $client->post("$pythonApiUrl/api/v1/crop_my_face", [ // <<< UBAH KE PATH BARU INI
+                        'multipart' => [
                             [
                                 'name'     => 'foto',
-                                'contents' => $fileHandle, // Gunakan resource file handle
-                                'filename' => basename($tempFullPath) // Nama file asli
+                                'contents' => $fileHandle,
+                                'filename' => basename($tempFullPath)
                             ],
                             [
                                 'name'     => 'karyawan_id',
                                 'contents' => $karyawan->id
                             ]
                         ],
-                        'verify' => false // Opsional: Nonaktifkan verifikasi SSL untuk development
+                        'verify' => false
                     ]);
 
                     $statusCode = $response->getStatusCode();
@@ -137,14 +137,13 @@ class KaryawanController extends Controller
 
                         KaryawanFoto::create([
                             'karyawan_id' => $karyawan->id,
-                            'path'        => $croppedPathRelative, // Simpan path ke foto yang sudah di-crop di face_db
+                            'path'        => $croppedPathRelative,
                         ]);
                         $successfulUploads[] = $croppedPathRelative;
                         Log::info("[KaryawanController@store] Foto cropped berhasil disimpan dan path dicatat: $croppedPathRelative");
 
                     } else {
                         Log::warning("[KaryawanController@store] Gagal crop foto (index $index): " . ($result['message'] ?? 'Unknown error dari API Python'));
-                        // Lanjutkan ke foto berikutnya atau tangani sesuai kebutuhan (misal: rollback semua?)
                     }
 
                 } catch (\GuzzleHttp\Exception\RequestException $e) {
@@ -175,11 +174,9 @@ class KaryawanController extends Controller
                     ], 500);
                     // <<< AKHIR UBAH >>>
                 } finally {
-                    // Pastikan file handle ditutup
                     if (isset($fileHandle) && is_resource($fileHandle)) {
                         fclose($fileHandle);
                     }
-                    // Hapus file temporer setelah diproses (berhasil atau gagal)
                     Storage::disk('private')->delete($tempPath);
                     Log::info("[KaryawanController@store] File temporer dihapus: $tempFullPath");
                 }
@@ -255,14 +252,14 @@ class KaryawanController extends Controller
                 try {
                     // --- DEBUGGING PANGGILAN GUZZLE ---
                     Log::info("[KaryawanController@update] Memanggil API Python /crop-face:", [
-                        'target_url' => "$pythonApiUrl/crop-face",
+                        'target_url' => "$pythonApiUrl/api/v1/crop_my_face", // <<< UBAH KE PATH BARU INI
                         'http_method_sent' => 'POST',
                         'karyawan_id_sent' => $karyawan->id,
                         'original_filename' => $image->getClientOriginalName(),
                     ]);
                     // --- AKHIR DEBUGGING PANGGILAN GUZZLE ---
 
-                    $response = $client->post("$pythonApiUrl/crop-face", [
+                    $response = $client->post("$pythonApiUrl/api/v1/crop_my_face", [ // <<< UBAH KE PATH BARU INI
                         'multipart' => [
                             [
                                 'name'     => 'foto',
