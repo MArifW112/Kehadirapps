@@ -63,9 +63,7 @@ class KaryawanController extends Controller
             $pythonApiUrl = env('PYTHON_API_URL');
             if (empty($pythonApiUrl)) {
                 Log::error('[KaryawanController@store] PYTHON_API_URL tidak terdefinisi di .env Laravel!');
-                // Hapus user dan karyawan yang baru dibuat jika ini error fatal
-                $karyawan->delete();
-                $user->delete();
+                $karyawan->delete(); $user->delete();
                 return redirect()->back()->withInput()->with('error', 'Konfigurasi server tidak lengkap (API Python URL missing).');
             }
 
@@ -78,21 +76,49 @@ class KaryawanController extends Controller
                 $tempFullPath = Storage::disk('private')->path($tempPath);
                 Log::info("[KaryawanController@store] Foto asli disimpan sementara di: $tempFullPath");
 
+                // --- DEBUGGING FILE TEMPORER DAN FOPEN ---
+                Log::info("[KaryawanController@store] Debug File Temporer:", [
+                    'temp_path_storage' => $tempPath,
+                    'temp_full_path_physical' => $tempFullPath,
+                    'file_exists_physical' => file_exists($tempFullPath) ? 'true' : 'false',
+                    'file_is_readable' => is_readable($tempFullPath) ? 'true' : 'false',
+                    'file_size_bytes' => file_exists($tempFullPath) ? filesize($tempFullPath) : 'N/A',
+                ]);
+
+                $fileHandle = @fopen($tempFullPath, 'r'); // Menggunakan @ untuk menekan warning jika file tidak ada
+                if ($fileHandle === false) {
+                    Log::error("[KaryawanController@store] GAGAL MEMBUKA FILE TEMPORER UNTUK DIKIRIM KE PYTHON!", [
+                        'temp_full_path' => $tempFullPath,
+                        'karyawan_id' => $karyawan->id
+                    ]);
+                    Storage::disk('private')->delete($tempPath);
+                    continue; // Lanjutkan ke foto berikutnya jika ada error file ini
+                }
+                // --- AKHIR DEBUGGING FILE TEMPORER ---
+
                 try {
-                    // Panggil API Python /crop-face
+                    // --- DEBUGGING PANGGILAN GUZZLE ---
+                    Log::info("[KaryawanController@store] Memanggil API Python /crop-face:", [
+                        'target_url' => "$pythonApiUrl/crop-face",
+                        'http_method_sent' => 'POST', // Konfirmasi bahwa kita memanggil POST
+                        'karyawan_id_sent' => $karyawan->id,
+                        'original_filename' => $image->getClientOriginalName(),
+                    ]);
+                    // --- AKHIR DEBUGGING PANGGILAN GUZZLE ---
+
                     $response = $client->post("$pythonApiUrl/crop-face", [
-                        'multipart' => [
+                        'multipart' => [ // Kirim sebagai multipart form-data untuk file dan field lainnya
                             [
                                 'name'     => 'foto',
-                                'contents' => fopen($tempFullPath, 'r'),
+                                'contents' => $fileHandle, // Gunakan resource file handle
                                 'filename' => $image->getClientOriginalName()
                             ],
                             [
                                 'name'     => 'karyawan_id',
-                                'contents' => $karyawan->id // Kirim karyawan_id agar Python tahu folder tujuan
+                                'contents' => $karyawan->id
                             ]
                         ],
-                        'verify' => false // Opsional: Nonaktifkan verifikasi SSL untuk development jika ada masalah sertifikat
+                        'verify' => false // Opsional: Nonaktifkan verifikasi SSL untuk development
                     ]);
 
                     $statusCode = $response->getStatusCode();
@@ -105,30 +131,35 @@ class KaryawanController extends Controller
                     // Pastikan respons sukses dari Python API
                     if ($statusCode === 200 && isset($result['status']) && $result['status'] === 'success') {
                         // Python API sudah menyimpan foto yang ter-crop ke Persistent Volume.
-                        // 'path' yang dikembalikan adalah path relatif dari FACE_DB_ROOT,
-                        // misalnya: '1/face_abcdef123.jpg'
-                        $croppedPathRelative = 'face_db/' . $result['path']; // Gabungkan dengan folder utama face_db
+                        // 'path' yang dikembalikan adalah path relatif dari FACE_DB_ROOT
+                        $croppedPathRelative = 'face_db/' . $result['path'];
 
                         KaryawanFoto::create([
                             'karyawan_id' => $karyawan->id,
                             'path'        => $croppedPathRelative, // Simpan path ke foto yang sudah di-crop di face_db
                         ]);
-                        $successfulUploads[] = $croppedPathRelative; // Catat yang berhasil
+                        $successfulUploads[] = $croppedPathRelative;
                         Log::info("[KaryawanController@store] Foto cropped berhasil disimpan dan path dicatat: $croppedPathRelative");
 
                     } else {
                         Log::warning("[KaryawanController@store] Gagal crop foto (index $index): " . ($result['message'] ?? 'Unknown error dari API Python'));
-                        // Lanjutkan ke foto berikutnya atau tangani sesuai kebutuhan (misal: rollback semua?)
                     }
 
                 } catch (\GuzzleHttp\Exception\RequestException $e) {
                     $responseBody = $e->getResponse() ? $e->getResponse()->getBody()->getContents() : $e->getMessage();
-                    Log::error("[KaryawanController@store] Guzzle RequestException saat crop foto (index $index): " . $e->getMessage(), ['response' => $responseBody]);
-                    // Lanjutkan atau tangani error secara spesifik
+                    Log::error("[KaryawanController@store] Guzzle RequestException saat crop foto (index $index): " . $e->getMessage(), [
+                        'response_status' => $e->getResponse() ? $e->getResponse()->getStatusCode() : 'N/A',
+                        'response_body' => $responseBody,
+                        'request_url' => $e->getRequest()->getUri()->__toString(),
+                        'request_method' => $e->getRequest()->getMethod(),
+                    ]);
                 } catch (\Exception $e) {
                     Log::error("[KaryawanController@store] General Exception saat crop foto (index $index): " . $e->getMessage());
-                    // Lanjutkan atau tangani error secara spesifik
                 } finally {
+                    // Pastikan file handle ditutup
+                    if (isset($fileHandle) && is_resource($fileHandle)) {
+                        fclose($fileHandle);
+                    }
                     // Hapus file temporer setelah diproses (berhasil atau gagal)
                     Storage::disk('private')->delete($tempPath);
                     Log::info("[KaryawanController@store] File temporer dihapus: $tempFullPath");
@@ -137,9 +168,7 @@ class KaryawanController extends Controller
 
             if (empty($successfulUploads)) {
                 Log::warning('[KaryawanController@store] Tidak ada foto wajah yang berhasil diunggah dan disimpan!');
-                // Hapus user dan karyawan jika tidak ada foto wajah yang berhasil di-save
-                $karyawan->delete();
-                $user->delete();
+                $karyawan->delete(); $user->delete();
                 return redirect()->back()->withInput()->with('error', 'Gagal mengunggah dan memproses foto wajah. Pastikan foto mengandung wajah yang jelas.');
             }
         }
@@ -184,13 +213,42 @@ class KaryawanController extends Controller
                 $tempFullPath = Storage::disk('private')->path($tempPath);
                 Log::info("[KaryawanController@update] Foto asli disimpan sementara di: $tempFullPath");
 
+                // --- DEBUGGING FILE TEMPORER DAN FOPEN ---
+                Log::info("[KaryawanController@update] Debug File Temporer:", [
+                    'temp_path_storage' => $tempPath,
+                    'temp_full_path_physical' => $tempFullPath,
+                    'file_exists_physical' => file_exists($tempFullPath) ? 'true' : 'false',
+                    'file_is_readable' => is_readable($tempFullPath) ? 'true' : 'false',
+                    'file_size_bytes' => file_exists($tempFullPath) ? filesize($tempFullPath) : 'N/A',
+                ]);
+
+                $fileHandle = @fopen($tempFullPath, 'r');
+                if ($fileHandle === false) {
+                    Log::error("[KaryawanController@update] GAGAL MEMBUKA FILE TEMPORER UNTUK DIKIRIM KE PYTHON!", [
+                        'temp_full_path' => $tempFullPath,
+                        'karyawan_id' => $karyawan->id
+                    ]);
+                    Storage::disk('private')->delete($tempPath);
+                    continue;
+                }
+                // --- AKHIR DEBUGGING FILE TEMPORER ---
+
                 try {
+                    // --- DEBUGGING PANGGILAN GUZZLE ---
+                    Log::info("[KaryawanController@update] Memanggil API Python /crop-face:", [
+                        'target_url' => "$pythonApiUrl/crop-face",
+                        'http_method_sent' => 'POST',
+                        'karyawan_id_sent' => $karyawan->id,
+                        'original_filename' => $image->getClientOriginalName(),
+                    ]);
+                    // --- AKHIR DEBUGGING PANGGILAN GUZZLE ---
+
                     $response = $client->post("$pythonApiUrl/crop-face", [
                         'multipart' => [
                             [
                                 'name'     => 'foto',
-                                'contents' => fopen($tempFullPath, 'r'),
-                                'filename' => $image->getClientOriginalName()
+                                'contents' => $fileHandle,
+                                'filename' => basename($tempFullPath)
                             ],
                             [
                                 'name'     => 'karyawan_id',
@@ -212,7 +270,7 @@ class KaryawanController extends Controller
 
                         KaryawanFoto::create([
                             'karyawan_id' => $karyawan->id,
-                            'path'        => $croppedPathRelative, // Simpan path ke foto yang sudah di-crop di face_db
+                            'path'        => $croppedPathRelative,
                         ]);
                         Log::info("[KaryawanController@update] Foto cropped berhasil disimpan dan path dicatat: $croppedPathRelative");
                     } else {
@@ -221,10 +279,18 @@ class KaryawanController extends Controller
 
                 } catch (\GuzzleHttp\Exception\RequestException $e) {
                     $responseBody = $e->getResponse() ? $e->getResponse()->getBody()->getContents() : $e->getMessage();
-                    Log::error("[KaryawanController@update] Guzzle RequestException saat crop foto (index $index): " . $e->getMessage(), ['response' => $responseBody]);
+                    Log::error("[KaryawanController@update] Guzzle RequestException saat crop foto (index $index): " . $e->getMessage(), [
+                        'response_status' => $e->getResponse() ? $e->getResponse()->getStatusCode() : 'N/A',
+                        'response_body' => $responseBody,
+                        'request_url' => $e->getRequest()->getUri()->__toString(),
+                        'request_method' => $e->getRequest()->getMethod(),
+                    ]);
                 } catch (\Exception $e) {
                     Log::error("[KaryawanController@update] General Exception saat crop foto (index $index): " . $e->getMessage());
                 } finally {
+                    if (isset($fileHandle) && is_resource($fileHandle)) {
+                        fclose($fileHandle); // Pastikan file handle ditutup
+                    }
                     Storage::disk('private')->delete($tempPath);
                     Log::info("[KaryawanController@update] File temporer dihapus: $tempFullPath");
                 }
@@ -237,26 +303,20 @@ class KaryawanController extends Controller
     public function destroy(Karyawan $karyawan)
     {
         Log::info('==== [KaryawanController@destroy] Menghapus Karyawan ID: ' . $karyawan->id . ' ====');
-        // Hapus foto dari storage & database
         foreach ($karyawan->fotos as $foto) {
-            // Path yang disimpan di DB adalah 'face_db/{karyawan_id}/face_{uuid}.jpg'
-            // Kita hanya perlu menghapus file ini dari disk 'public' (Persistent Volume)
             if (Storage::disk('public')->exists($foto->path)) {
                 Storage::disk('public')->delete($foto->path);
                 Log::info("[KaryawanController@destroy] Foto DB dihapus dari Persistent Volume: " . $foto->path);
             } else {
                 Log::warning("[KaryawanController@destroy] Foto tidak ditemukan di Persistent Volume, mungkin sudah dihapus sebelumnya: " . $foto->path);
             }
-            $foto->delete(); // Hapus dari database Laravel
+            $foto->delete();
         }
 
-        // Hapus data karyawan & user
         $karyawan->user()->delete();
         $karyawan->delete();
         Log::info('[KaryawanController@destroy] Karyawan dan User berhasil dihapus.');
 
-
-        // Opsional: hapus folder face_db jika sudah kosong dan ada di Persistent Volume
         $faceDbDirInVolume = 'face_db/' . $karyawan->id;
         if (Storage::disk('public')->exists($faceDbDirInVolume) && count(Storage::disk('public')->files($faceDbDirInVolume)) === 0) {
             Storage::disk('public')->deleteDirectory($faceDbDirInVolume);
@@ -266,14 +326,11 @@ class KaryawanController extends Controller
         return redirect()->route('admin.karyawan.index')->with('success', 'Karyawan berhasil dihapus.');
     }
 
-    // deleteFoto() tetap sama, tapi sekarang akan menghapus dari Persistent Volume
     public function deleteFoto($id)
     {
         Log::info('==== [KaryawanController@deleteFoto] Menghapus Foto ID: ' . $id . ' ====');
         $foto = KaryawanFoto::findOrFail($id);
 
-        // Path yang disimpan di DB adalah 'face_db/{karyawan_id}/face_{uuid}.jpg'
-        // Kita hanya perlu menghapus file ini dari disk 'public' (Persistent Volume)
         if (Storage::disk('public')->exists($foto->path)) {
             Storage::disk('public')->delete($foto->path);
             Log::info("[KaryawanController@deleteFoto] Foto dihapus dari Persistent Volume: " . $foto->path);
@@ -281,11 +338,9 @@ class KaryawanController extends Controller
             Log::warning("[KaryawanController@deleteFoto] Foto tidak ditemukan di Persistent Volume, mungkin sudah dihapus sebelumnya: " . $foto->path);
         }
 
-        $foto->delete(); // Hapus dari database Laravel
+        $foto->delete();
         Log::info("[KaryawanController@deleteFoto] Foto dari database Laravel dihapus.");
 
-
-        // Opsional: periksa dan hapus folder face_db jika sudah kosong setelah penghapusan foto
         $faceDbDirInVolume = 'face_db/' . $foto->karyawan_id;
         if (Storage::disk('public')->exists($faceDbDirInVolume) && count(Storage::disk('public')->files($faceDbDirInVolume)) === 0) {
             Storage::disk('public')->deleteDirectory($faceDbDirInVolume);
@@ -303,7 +358,6 @@ class KaryawanController extends Controller
 
     public function show($id)
     {
-        // Ambil data karyawan beserta relasi foto dan user-nya
         $karyawan = Karyawan::with(['fotos', 'user'])->findOrFail($id);
         return view('admin.karyawan.show', compact('karyawan'));
     }
