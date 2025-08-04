@@ -16,19 +16,20 @@ class StatistikApiController extends Controller
             return response()->json(['status' => false, 'message' => 'karyawan_id wajib diisi'], 400);
         }
 
-        // Total hadir (status = Hadir)
+        // [PERBAIKAN] Total hadir dihitung dari status 'Hadir' dan 'Telat'
+        // karena karyawan yang telat tetap dianggap hadir pada hari itu.
         $absen = Absensi::where('karyawan_id', $karyawanId)
-            ->where('status', 'Hadir')
+            ->whereIn('status', ['Hadir', 'Telat'])
             ->count();
 
-        // Total izin (status = Disetujui pada pengajuan_izin)
+        // Total izin (status = Disetujui pada pengajuan_izin) - INI SUDAH BENAR
         $izin = PengajuanIzin::where('karyawan_id', $karyawanId)
             ->where('status', 'Disetujui')
             ->count();
 
-        // Total telat (status = Telat di absensi)
-        $telat = Absensi::where('karyawan_id', $karyawanId)
-            ->where('status', 'Telat')
+        // [PERUBAHAN UTAMA] Mengganti perhitungan 'Telat' menjadi 'Alpha'
+        $alpha = Absensi::where('karyawan_id', $karyawanId)
+            ->where('status', 'Alpha')
             ->count();
 
         return response()->json([
@@ -36,7 +37,7 @@ class StatistikApiController extends Controller
             'data' => [
                 'absen' => $absen,
                 'izin' => $izin,
-                'telat' => $telat,
+                'alpha' => $alpha, // Key dan value diubah dari 'telat' menjadi 'alpha'
             ]
         ]);
     }
